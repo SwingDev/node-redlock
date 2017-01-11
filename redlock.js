@@ -252,7 +252,7 @@ Redlock.prototype.extend = function extend(lock, ttl, callback) {
 //   }
 // )
 // ```
-Redlock.prototype._lock = function _lock(resource, value, ttl, callback) {
+Redlock.prototype._lock = function _lock(resource, value, ttl, callback, preLock) {
 	var self = this;
 	return new Promise(function(resolve, reject) {
 		var request;
@@ -292,30 +292,36 @@ Redlock.prototype._lock = function _lock(resource, value, ttl, callback) {
 			var waiting = self.servers.length;
 
 			function loop(err, response) {
-				if(err) self.emit('clientError', err);
-				if(response) votes++;
-				if(waiting-- > 1) return;
+				(preLock || Promise.reject)()
+				.then(data => {
+					resolve(data)
+				})
+				.catch(err => {
+					if(err) self.emit('clientError', err);
+					if(response) votes++;
+					if(waiting-- > 1) return;
 
-				// Add 2 milliseconds to the drift to account for Redis expires precision, which is 1 ms,
-				// plus the configured allowable drift factor
-				var drift = Math.round(self.driftFactor * ttl) + 2;
-				var lock = new Lock(self, resource, value, start + ttl - drift);
+					// Add 2 milliseconds to the drift to account for Redis expires precision, which is 1 ms,
+					// plus the configured allowable drift factor
+					var drift = Math.round(self.driftFactor * ttl) + 2;
+					var lock = new Lock(self, resource, value, start + ttl - drift);
 
-				// SUCCESS: there is concensus and the lock is not expired
-				if(votes >= quorum && lock.expiration > Date.now())
-					return resolve(lock);
+					// SUCCESS: there is concensus and the lock is not expired
+					if(votes >= quorum && lock.expiration > Date.now())
+						return resolve(lock);
 
 
-				// remove this lock from servers that voted for it
-				return lock.unlock(function(){
+					// remove this lock from servers that voted for it
+					return lock.unlock(function(){
 
-					// RETRY
-					if(attempts <= self.retryCount)
-						return setTimeout(attempt, self.retryDelay);
+						// RETRY
+						if(attempts <= self.retryCount)
+							return setTimeout(attempt, self.retryDelay);
 
-					// FAILED
-					return reject(new LockError('Exceeded ' + self.retryCount + ' attempts to lock the resource "' + resource + '".'));
-				});
+						// FAILED
+						return reject(new LockError('Exceeded ' + self.retryCount + ' attempts to lock the resource "' + resource + '".'));
+					});
+				})
 			}
 
 			return self.servers.forEach(function(server){
