@@ -115,8 +115,8 @@ Redlock.LockError = LockError;
 // )
 // ```
 Redlock.prototype.acquire =
-Redlock.prototype.lock = function lock(resource, ttl, callback) {
-	return this._lock(resource, null, ttl, callback);
+Redlock.prototype.lock = function lock(resource, ttl, callback, preLock) {
+	return this._lock(resource, null, ttl, callback, preLock);
 };
 
 // lock
@@ -277,26 +277,31 @@ Redlock.prototype._lock = function _lock(resource, value, ttl, callback, preLock
 		}
 
 		function attempt(){
-			attempts++;
 
-			// the time when this attempt started
-			var start = Date.now();
+			if (!preLock || !preLock.call) {
+				preLock = Promise.reject()
+			}
 
-			// the number of servers which have agreed to this lock
-			var votes = 0;
+			preLock()
+			.then(data => resolve(data))
+			.catch(err => {
 
-			// the number of votes needed for consensus
-			var quorum = Math.floor(self.servers.length / 2) + 1;
 
-			// the number of async redis calls still waiting to finish
-			var waiting = self.servers.length;
+				attempts++;
 
-			function loop(err, response) {
-				(preLock || Promise.reject)()
-				.then(data => {
-					resolve(data)
-				})
-				.catch(err => {
+				// the time when this attempt started
+				var start = Date.now();
+
+				// the number of servers which have agreed to this lock
+				var votes = 0;
+
+				// the number of votes needed for consensus
+				var quorum = Math.floor(self.servers.length / 2) + 1;
+
+				// the number of async redis calls still waiting to finish
+				var waiting = self.servers.length;
+
+				function loop(err, response) {
 					if(err) self.emit('clientError', err);
 					if(response) votes++;
 					if(waiting-- > 1) return;
@@ -321,12 +326,12 @@ Redlock.prototype._lock = function _lock(resource, value, ttl, callback, preLock
 						// FAILED
 						return reject(new LockError('Exceeded ' + self.retryCount + ' attempts to lock the resource "' + resource + '".'));
 					});
-				})
-			}
+				}
 
-			return self.servers.forEach(function(server){
-				return request(server, loop);
-			});
+				return self.servers.forEach(function(server){
+					return request(server, loop);
+				});
+			})
 		}
 
 		return attempt();
